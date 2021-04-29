@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading.Tasks;
 using Box.V2;
 using Box.V2.Models;
 
@@ -34,7 +35,7 @@ namespace BUFHelper
 
         public void makeFoldersForUser(string uid)
         {
-            var userGroups = getUserGroups(uid);
+            var userGroups = GetUserGroups(uid).Result;
             userGroups.Entries.ForEach((BoxGroupMembership membership) =>
             {
                 if (membership.Group.Id == "123")
@@ -44,19 +45,19 @@ namespace BUFHelper
             });
         }
 
-        public BoxCollection<BoxGroupMembership> getUserGroups(string uid)
+        public async Task<BoxCollection<BoxGroupMembership>> GetUserGroups(string uid)
         {
-            return client.GroupsManager.GetAllGroupMembershipsForUserAsync(uid, autoPaginate: true).Result;
+            return await client.GroupsManager.GetAllGroupMembershipsForUserAsync(uid, autoPaginate: true);
         }
 
-        public BoxCollection<BoxGroupMembership> getGroupUsers(string gid)
+        public async Task<BoxCollection<BoxGroupMembership>> getGroupUsers(string gid)
         {
-            return client.GroupsManager.GetAllGroupMembershipsForGroupAsync(gid, autoPaginate: true).Result;
+            return await client.GroupsManager.GetAllGroupMembershipsForGroupAsync(gid, autoPaginate: true);
         }
 
-        public BoxCollection<BoxItem> getFolderContents(string id)
+        public async Task<BoxCollection<BoxItem>> GetFolderContents(string id)
         {
-            return client.FoldersManager.GetFolderItemsAsync(id, 1000, autoPaginate: true).Result;
+            return await client .FoldersManager.GetFolderItemsAsync(id, 1000, autoPaginate: true);
         }
     }
 }

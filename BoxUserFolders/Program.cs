@@ -10,17 +10,22 @@ using System.CommandLine.Builder;
 using System.CommandLine.IO;
 using System.CommandLine.Parsing;
 using Newtonsoft.Json;
+using System.Threading.Tasks;
+using System.Collections.Generic;
 
 namespace BoxUserFolders
 {
 	class Program
 	{
+		static DataHolder data;
+		static UserFolders userFolders;
+
 		static int Main(string[] args)
 		{
 			var boxcfgopt = new Option<FileInfo>(new[] { "--config", "-c" }, description: "UserFolders JSON config file") { IsRequired = true, AllowMultipleArgumentsPerToken = false };
 			var boxfileopt = new Option<FileInfo>(new[] { "--box-auth-file", "-a" }, description: "Box JWT JSON file") { IsRequired = false, AllowMultipleArgumentsPerToken = false };
 
-			var writecfgopt = new Option<bool>(new[] { "--write-default-config" }, description: "OVerwrites the provided config with the default") { IsRequired = false, AllowMultipleArgumentsPerToken = false };
+			var writecfgopt = new Option<bool>(new[] { "--write-default-config" }, description: "Overwrites the provided config with the default") { IsRequired = false, AllowMultipleArgumentsPerToken = false };
 
 			var rootcmd = new RootCommand
 			{
@@ -45,7 +50,7 @@ namespace BoxUserFolders
 			var getUsersCmd = new Command("list-users");
 			getUsersCmd.Handler = CommandHandler.Create((IConsole console) =>
 			{
-				var list = UserFolders.GetUsers().Result.Entries;
+				var list = userFolders.GetUsers().Result.Entries;
 				list.ForEach((BoxUser user) =>
 				{
 					console.Out.Write($"{user.Id}: {user.Name}\n");
@@ -55,7 +60,7 @@ namespace BoxUserFolders
 			var getNewCmd = new Command("list-new-users");
 			getNewCmd.Handler = CommandHandler.Create((IConsole console) =>
 			{
-				var list = UserFolders.GetNewUserEvents().Result;
+				var list = userFolders.GetNewUserEvents().Result;
 				//list.Entries.ForEach((BoxEnterpriseEvent e) =>
 				//{
 				//    console.Out.Write($"{e.}: {e.Name}\n");
@@ -89,7 +94,7 @@ namespace BoxUserFolders
 			{
 				try
 				{
-					var list = UserFolders.GetFolderContents(ClientManager.Get("957394352"), folderId).Result;
+					var list = userFolders.GetFolderContents(folderId).Result;
 					list.Entries.ForEach((BoxItem item) =>
 					{
 						console.Out.Write($"{item.Id}: {item.Name}\n");
@@ -103,17 +108,104 @@ namespace BoxUserFolders
 
 			});
 
+			var getGroupUsersCmd = new Command("users-for-group") {
+				new Argument<string>("group-id")
+			};
+			getGroupUsersCmd.Handler = CommandHandler.Create((IConsole console, string groupId) =>
+			{
+				try
+				{
+					var list = userFolders.GetGroupUsers(groupId).Result.Entries;
+
+					if (list.Count > 0)
+						console.Out.Write(list[0].Group.Name + ":\n\n");
+					else
+						console.Out.WriteLine("Group has no members.");
+					
+					list.ForEach((BoxGroupMembership item) =>
+					{
+						console.Out.WriteLine($"{item.User.Id}: {item.User.Name}");
+					});
+				}
+				catch (Exception e)
+				{
+					console.Error.Write(e.ToString() + "\n");
+					throw;
+				}
+
+			});
+
+			var runForUserCmd = new Command("run-for-user") {
+				new Argument<string>("user-id")
+			};
+			runForUserCmd.Handler = CommandHandler.Create(async (IConsole console, string userId) =>
+			{
+				try
+				{
+					await userFolders.RunForUser(userId);
+				}
+				catch (Exception e)
+				{
+					console.Error.Write(e.ToString() + "\n");
+					throw;
+				}
+
+			});
+
+			var runForGroupCmd = new Command("run-for-group") {
+				new Argument<string>("group-id")
+			};
+			runForGroupCmd.Handler = CommandHandler.Create(async (IConsole console, string groupId) =>
+			{
+				try
+				{
+					await userFolders.RunForGroup(groupId);
+				}
+				catch (Exception e)
+				{
+					console.Error.Write(e.ToString() + "\n");
+					throw;
+				}
+
+			});
+
+			var runForAllCmd = new Command("run");
+			runForAllCmd.Handler = CommandHandler.Create(async (IConsole console, string groupId) =>
+			{
+				try
+				{
+					var taskList = new List<Task>();
+
+					foreach (var maping in data.config.groupMapings)
+					{
+						taskList.Add(userFolders.RunForGroup(maping));
+					}
+
+					await Task.WhenAll(taskList);
+				}
+				catch (Exception e)
+				{
+					console.Error.Write(e.ToString() + "\n");
+					throw;
+				}
+
+			});
 
 			rootcmd.AddCommand(getUsersCmd);
 			rootcmd.AddCommand(getNewCmd);
 			rootcmd.AddCommand(getTokenCmd);
 			rootcmd.AddCommand(getFolderListingCmd);
+			rootcmd.AddCommand(getGroupUsersCmd);
+			rootcmd.AddCommand(runForUserCmd);
+			rootcmd.AddCommand(runForGroupCmd);
+			rootcmd.AddCommand(runForAllCmd);
 
 			var clBuilder = new CommandLineBuilder(rootcmd);
 			clBuilder.UseDefaults();
 			clBuilder.UseMiddleware(async (context, next) =>
 			{
 
+				//Exit if there are parse errors
 				if (context.ParseResult.Errors.Count > 0)
 				{
 					await next(context);
@@ -126,13 +218,8 @@ namespace BoxUserFolders
 
 				if (overwriteConfig)
 				{
-					Config newcfg = new Config()
-					{
-						accessFile = "./boxaccesfile.json",
-						groupAddedPointer = "0",
-					};
-					newcfg.groupMapings.Add("123", new Config.Maping() { folderId = "456", adminId = "789" });
-					config = newcfg;
+					// Generate the default config
+					config = Config.MakeDefault();
 
 					var ser = new JsonSerializer
 					{
@@ -168,9 +255,11 @@ namespace BoxUserFolders
 
 				FileInfo authfile = authFileProvided ? flagauthfile : new FileInfo(config.accessFile); // TODO: load from config file
 
+				ClientManager cm;
+
 				if (authfile.Exists)
 				{
-					ClientManager.LoadConfig(authfile);
+					cm = ClientManager.FromConfigFile(authfile);
 				}
 				else
 				{
@@ -178,6 +267,14 @@ namespace BoxUserFolders
 					context.ExitCode = 1;
 					return;
 				}
+
+				data = new DataHolder
+				{
+					config = config,
+					clientManager = cm
+				};
+
+				userFolders = new UserFolders(data);
 
 				await next(context);
 			});

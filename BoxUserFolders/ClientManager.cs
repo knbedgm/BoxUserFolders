@@ -9,20 +9,18 @@ using System.Text;
 namespace BoxUserFolders
 {
 
-    static class ClientManager
+    class ClientManager
     {
-        private static readonly Dictionary<string, BoxClient> map = new Dictionary<string, BoxClient>();
-        private static string admintoken;
-        private static BoxJWTAuth jwt;
+        private readonly Dictionary<string, BoxClient> map = new Dictionary<string, BoxClient>();
+        private string admintoken;
+        private BoxJWTAuth jwt;
 
-        public static BoxClient Get(string id)
+        public BoxClient Get(string id)
         {
-            if (jwt == null)
-                throw new Exception("ClientManager uninitialized");
             id = id.Trim();
             if (!map.ContainsKey(id))
             {
-                if (id == "0")
+                if (id == "0" || id == null)
                     map.Add(id, jwt.AdminClient(admintoken));
                 else
                     map.Add(id, jwt.AdminClient(admintoken, asUser: id));
@@ -30,11 +28,17 @@ namespace BoxUserFolders
             return map[id];
         }
 
-        public static void LoadConfig(FileInfo file)
+        public static ClientManager FromConfigFile(FileInfo file)
         {
             var boxcfg = BoxConfig.CreateFromJsonFile(file.OpenRead());
-            jwt = new BoxJWTAuth(boxcfg);
-            admintoken = jwt.AdminToken();
+            var jwt = new BoxJWTAuth(boxcfg);
+            return new ClientManager(jwt);
         }
+
+        public ClientManager(BoxJWTAuth jwt)
+		{
+            this.jwt = jwt;
+            this.admintoken = this.jwt.AdminToken();
+		}
     }
 }

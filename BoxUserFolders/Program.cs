@@ -57,6 +57,24 @@ namespace BoxUserFolders
 				});
 			});
 
+			const int helpFileMagicSize = 1875887;
+			var deleteInactive = new Option<bool>(new[] { "--delete-all-inactive" }, description: $"Deletes all inactive users owning 0 bytes or {helpFileMagicSize} bytes. Will not notify new owners") { IsRequired = false, AllowMultipleArgumentsPerToken = false };
+			var getUsersNonActiveCmd = new Command("list-non-active-users"){deleteInactive};
+			getUsersNonActiveCmd.Handler = CommandHandler.Create((IConsole console, bool deleteAllInactive) =>
+			{
+				console.Out.Write($"User ID, Name, Status, SpaceUsed{(deleteAllInactive?", Deleted":"")}\n");
+				var list = userFolders.GetUsers().Result.Entries;
+				list.FindAll((BoxUser u)=>{return u.Status != "active";}).ForEach((BoxUser user) =>
+				{
+					console.Out.Write($"{user.Id},{user.Name},{user.Status},{user.SpaceUsed}");
+					if (deleteAllInactive && (user.SpaceUsed == 0 || user.SpaceUsed == helpFileMagicSize)) {
+						var deleted = userFolders.DeleteUser(user).Result;
+						console.Out.Write($",{deleted}");
+					}
+					console.Out.Write("\n");
+				});
+			});
+
 			var getNewCmd = new Command("list-new-users");
 			getNewCmd.Handler = CommandHandler.Create((IConsole console) =>
 			{
@@ -192,6 +210,7 @@ namespace BoxUserFolders
 			});
 
 			rootcmd.AddCommand(getUsersCmd);
+			rootcmd.AddCommand(getUsersNonActiveCmd);
 			rootcmd.AddCommand(getNewCmd);
 			rootcmd.AddCommand(getTokenCmd);
 			rootcmd.AddCommand(getFolderListingCmd);

@@ -25,6 +25,16 @@ namespace BoxUserFolders
 			return await data.clientManager.Get("0").UsersManager.GetUserInformationAsync(uid);
 		}
 
+		public async Task<bool> DeleteUser(BoxUser user)
+		{
+			return await DeleteUser(user.Id);
+		}
+
+		public async Task<bool> DeleteUser(string uid)
+		{
+			return (await data.clientManager.Get("0").UsersManager.DeleteEnterpriseUserAsync(uid, false, true)) == null;
+		}
+
 		public async Task<BoxEventCollection<BoxEnterpriseEvent>> GetNewUserEvents()
 		{
 			return await data.clientManager.Get("0").EventsManager.EnterpriseEventsAsync(limit: 20, eventTypes: new[] { "NEW_USER" });

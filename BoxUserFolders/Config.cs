@@ -35,7 +35,7 @@ namespace BoxUserFolders
 		{
 			var cfg = new Config
 			{
-				accessFile = "./boxaccesfile.json",
+				accessFile = "./boxaccessfile.json",
 				groupAddedPointer = "0",
 			};
 			cfg.groupMapings.Add(new Config.Maping() { groupId = "123", folderId = "456", adminId = "789" });

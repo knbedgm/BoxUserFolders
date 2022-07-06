@@ -2,6 +2,7 @@
 using System.IO;
 using System.CommandLine;
 using System.CommandLine.Invocation;
+using System.Globalization;
 using Box.V2.Config;
 using Box.V2.JWTAuth;
 using Box.V2;
@@ -12,6 +13,9 @@ using System.CommandLine.Parsing;
 using Newtonsoft.Json;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using CsvHelper;
+using CsvHelper.Configuration;
+using CsvHelper.Configuration.Attributes;
 
 namespace BoxUserFolders
 {
@@ -19,6 +23,14 @@ namespace BoxUserFolders
 	{
 		static DataHolder data;
 		static UserFolders userFolders;
+
+		public class LoginMapCSV
+		{
+			[Index(0)]
+			public string currentLogin { get; set; }
+			[Index(1)]
+			public string newLogin { get; set; }
+		}
 
 		static int Main(string[] args)
 		{
@@ -34,18 +46,7 @@ namespace BoxUserFolders
 				writecfgopt,
 			};
 
-			//rootcmd.Handler = CommandHandler.Create((IConsole console, FileInfo boxAuthFile) =>
-			//{
-			//    if (boxAuthFile != null)
-			//    {
-			//        console.Out.Write(boxAuthFile.FullName);
-			//        console.Out.Write("\n");
-			//    }
-			//    else
-			//    {
-			//        console.Out.Write("please provide an auth file\n");
-			//    }
-			//});
+			//rootcmd.Handler = CommandHandler.Create((IConsole console) => { });
 
 			var getUsersCmd = new Command("list-users");
 			getUsersCmd.Handler = CommandHandler.Create((IConsole console) =>
@@ -56,24 +57,75 @@ namespace BoxUserFolders
 					console.Out.Write($"{user.Id}: {user.Name}\n");
 				});
 			});
+			rootcmd.AddCommand(getUsersCmd);
 
 			const int helpFileMagicSize = 1875887;
 			var deleteInactive = new Option<bool>(new[] { "--delete-all-inactive" }, description: $"Deletes all inactive users owning 0 bytes or {helpFileMagicSize} bytes. Will not notify new owners") { IsRequired = false, AllowMultipleArgumentsPerToken = false };
-			var getUsersNonActiveCmd = new Command("list-non-active-users"){deleteInactive};
+			var getUsersNonActiveCmd = new Command("list-non-active-users") { deleteInactive };
 			getUsersNonActiveCmd.Handler = CommandHandler.Create((IConsole console, bool deleteAllInactive) =>
 			{
-				console.Out.Write($"User ID, Name, Status, SpaceUsed{(deleteAllInactive?", Deleted":"")}\n");
+				console.Out.Write($"User ID, Name, Status, SpaceUsed{(deleteAllInactive ? ", Deleted" : "")}\n");
 				var list = userFolders.GetUsers().Result.Entries;
-				list.FindAll((BoxUser u)=>{return u.Status != "active";}).ForEach((BoxUser user) =>
-				{
-					console.Out.Write($"{user.Id},{user.Name},{user.Status},{user.SpaceUsed}");
-					if (deleteAllInactive && (user.SpaceUsed == 0 || user.SpaceUsed == helpFileMagicSize)) {
-						var deleted = userFolders.DeleteUser(user).Result;
-						console.Out.Write($",{deleted}");
-					}
-					console.Out.Write("\n");
-				});
+				list.FindAll((BoxUser u) => { return u.Status != "active"; }).ForEach((BoxUser user) =>
+					{
+						console.Out.Write($"{user.Id},{user.Name},{user.Status},{user.SpaceUsed}");
+						if (deleteAllInactive && (user.SpaceUsed == 0 || user.SpaceUsed == helpFileMagicSize))
+						{
+							var deleted = userFolders.DeleteUser(user).Result;
+							console.Out.Write($",{deleted}");
+						}
+						console.Out.Write("\n");
+					});
 			});
+			rootcmd.AddCommand(getUsersNonActiveCmd);
+
+			var newLoginsCsv = new Argument<FileInfo>(name: "path-to-csv", description: "path to the csv file containing the new email mappings.");
+			var mapUserEmailsCmd = new Command("map-logins", "This command takes a header-less csv and maps every user with a login (email) in the first column to the login in the second column.") { newLoginsCsv };
+			mapUserEmailsCmd.Handler = CommandHandler.Create(async (IConsole console, FileInfo pathToCsv) =>
+			{
+				Dictionary<string, string> loginMap = new();
+
+				var config = new CsvConfiguration(CultureInfo.InvariantCulture)
+				{
+					HasHeaderRecord = false,
+				};
+				using (var reader = pathToCsv.OpenText())
+				using (var csv = new CsvReader(reader, config))
+				{
+					var records = csv.GetRecords<LoginMapCSV>();
+					foreach (var item in records)
+					{
+						if (loginMap.ContainsKey(item.currentLogin))
+							console.Error.WriteLine($"Login \"{item.currentLogin}\" has mulltiple mappings, using last.");
+						loginMap[item.currentLogin] = item.newLogin;
+					}
+					//foreach (var key in loginMap.Keys)
+					//{
+					//	console.Out.WriteLine($"{key} : {loginMap[key]}");
+					//}
+				}
+				var taskList = new List<Task>();
+				var list = userFolders.GetUsers().Result.Entries;
+				list.ForEach((BoxUser user) =>
+				{
+					if (loginMap.ContainsKey(user.Login))
+					{
+						taskList.Add(Task.Run(async () =>
+						{
+							var res = await userFolders.UpdateUserLogin(user, loginMap[user.Login]);
+							if (res)
+							{
+								console.Out.WriteLine($"User ({user.Id}, {user.Name}) changed from {user.Login} to {loginMap[user.Login]}");
+							} else
+							{
+								console.Out.WriteLine($"Unable to map user ({user.Id}, {user.Name}) from {user.Login} to {loginMap[user.Login]}");
+							}
+						}));
+					}
+				});
+				await Task.WhenAll(taskList);
+			});
+			rootcmd.AddCommand(mapUserEmailsCmd);
 
 			var getNewCmd = new Command("list-new-users");
 			getNewCmd.Handler = CommandHandler.Create((IConsole console) =>
@@ -88,9 +140,8 @@ namespace BoxUserFolders
 				foreach (var ent in list.Entries)
 				{
 
-					if (ent.Source is BoxUser)
+					if (ent.Source is BoxUser usr)
 					{
-						BoxUser usr = (BoxUser)ent.Source;
 						console.Out.WriteLine($"{ent.CreatedAt}: {usr.Name}");
 					}
 				}
@@ -98,12 +149,14 @@ namespace BoxUserFolders
 				//console.Out.WriteLine(list.Entries[0].Source.GetType().ToString());
 
 			});
+			rootcmd.AddCommand(getNewCmd);
 
 			var getTokenCmd = new Command("get-token");
 			getTokenCmd.Handler = CommandHandler.Create((IConsole console, FileInfo boxAuthFile) =>
 			{
 				console.Out.Write((new BoxJWTAuth(BoxConfig.CreateFromJsonFile(boxAuthFile.OpenRead()))).AdminToken() + "\n");
 			});
+			rootcmd.AddCommand(getTokenCmd);
 
 			var getFolderListingCmd = new Command("ls") {
 				new Argument<string>("folder-id")
@@ -125,6 +178,7 @@ namespace BoxUserFolders
 				}
 
 			});
+			rootcmd.AddCommand(getFolderListingCmd);
 
 			var getGroupUsersCmd = new Command("users-for-group") {
 				new Argument<string>("group-id")
@@ -139,7 +193,7 @@ namespace BoxUserFolders
 						console.Out.Write(list[0].Group.Name + ":\n\n");
 					else
 						console.Out.WriteLine("Group has no members.");
-					
+
 					list.ForEach((BoxGroupMembership item) =>
 					{
 						console.Out.WriteLine($"{item.User.Id}: {item.User.Name}");
@@ -152,6 +206,7 @@ namespace BoxUserFolders
 				}
 
 			});
+			rootcmd.AddCommand(getGroupUsersCmd);
 
 			var runForUserCmd = new Command("run-for-user") {
 				new Argument<string>("user-id")
@@ -169,6 +224,7 @@ namespace BoxUserFolders
 				}
 
 			});
+			rootcmd.AddCommand(runForUserCmd);
 
 			var runForGroupCmd = new Command("run-for-group") {
 				new Argument<string>("group-id")
@@ -186,6 +242,7 @@ namespace BoxUserFolders
 				}
 
 			});
+			rootcmd.AddCommand(runForGroupCmd);
 
 			var runForAllCmd = new Command("run");
 			runForAllCmd.Handler = CommandHandler.Create(async (IConsole console, string groupId) =>
@@ -208,15 +265,6 @@ namespace BoxUserFolders
 				}
 
 			});
-
-			rootcmd.AddCommand(getUsersCmd);
-			rootcmd.AddCommand(getUsersNonActiveCmd);
-			rootcmd.AddCommand(getNewCmd);
-			rootcmd.AddCommand(getTokenCmd);
-			rootcmd.AddCommand(getFolderListingCmd);
-			rootcmd.AddCommand(getGroupUsersCmd);
-			rootcmd.AddCommand(runForUserCmd);
-			rootcmd.AddCommand(runForGroupCmd);
 			rootcmd.AddCommand(runForAllCmd);
 
 			var clBuilder = new CommandLineBuilder(rootcmd);
@@ -251,6 +299,7 @@ namespace BoxUserFolders
 					var writer = new JsonTextWriter(new StreamWriter(cfgfile.OpenWrite()));
 					ser.Serialize(writer, config);
 					writer.Flush();
+					context.Console.Out.WriteLine($"Wrote default config to: \"{cfgfile}\".");
 				}
 				else
 				{

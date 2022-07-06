@@ -1,0 +1,11 @@
+{
+  "groupMapings": [
+    {
+      "groupId": "123",
+      "folderId": "456",
+      "adminId": "789"
+    }
+  ],
+  "accessFile": "./boxaccessfile.json",
+  "internal.lastpointer": "0"
+}

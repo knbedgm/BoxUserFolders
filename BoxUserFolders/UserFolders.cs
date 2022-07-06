@@ -35,6 +35,21 @@ namespace BoxUserFolders
 			return (await data.clientManager.Get("0").UsersManager.DeleteEnterpriseUserAsync(uid, false, true)) == null;
 		}
 
+		public async Task<bool> UpdateUserLogin(BoxUser user, string newLogin)
+		{
+			return await UpdateUserLogin(user.Id, newLogin);
+		}
+
+		public async Task<bool> UpdateUserLogin(string uid, string newLogin)
+		{
+			var newdata = new BoxUserRequest()
+			{
+				Id = uid,
+				Login = newLogin,
+			};
+			return (await data.clientManager.Get("0").UsersManager.UpdateUserInformationAsync(newdata)).Login == newLogin;
+		}
+
 		public async Task<BoxEventCollection<BoxEnterpriseEvent>> GetNewUserEvents()
 		{
 			return await data.clientManager.Get("0").EventsManager.EnterpriseEventsAsync(limit: 20, eventTypes: new[] { "NEW_USER" });
